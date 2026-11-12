@@ -1,0 +1,50 @@
+name: Clima PACE
+
+on:
+  schedule:
+    - cron: "20 * * * *"   # a cada hora, no minuto 20 (UTC)
+  workflow_dispatch:        # botão "Run workflow" para testar na hora
+
+permissions:
+  contents: write
+
+jobs:
+  clima:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Buscar clima do Estreito (Open-Meteo)
+        run: |
+          python3 - <<'EOF'
+          import json, urllib.request, datetime
+          url = ("https://api.open-meteo.com/v1/forecast?latitude=-27.5935&longitude=-48.5862"
+                 "&current=temperature_2m,weather_code,is_day"
+                 "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+                 "&timezone=America%2FSao_Paulo&forecast_days=4")
+          j = json.load(urllib.request.urlopen(url, timeout=25))
+          def cond(c):
+              if c is None: return "cloudy"
+              return ("clear" if c <= 1 else "cloudy" if c <= 3 else "fog" if c in (45, 48)
+                      else "drizzle" if 51 <= c <= 57 else "rain" if (61 <= c <= 67 or 80 <= c <= 82)
+                      else "snow" if (71 <= c <= 77 or c in (85, 86)) else "thunderstorm" if c >= 95 else "cloudy")
+          d = j["daily"]
+          days = [{"date": d["time"][i], "cond": cond(d["weather_code"][i]),
+                   "hi": d["temperature_2m_max"][i], "lo": d["temperature_2m_min"][i],
+                   "rain": d["precipitation_probability_max"][i] or 0} for i in range(len(d["time"]))]
+          now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-3)))
+          out = {"updated": now.strftime("%Y-%m-%dT%H:%M:00-03:00"), "place": "Estreito, Florianópolis",
+                 "now": {"temp": j["current"]["temperature_2m"], "cond": cond(j["current"]["weather_code"]),
+                         "is_day": bool(j["current"]["is_day"])},
+                 "today": days[0], "tomorrow": days[1], "days": days}
+          open("clima.json", "w").write(json.dumps(out, ensure_ascii=False, separators=(",", ":")))
+          print(json.dumps(out, ensure_ascii=False))
+          EOF
+
+      - name: Salvar no repositório
+        run: |
+          git config user.name "pace-clima-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add clima.json
+          git commit -m "Clima $(date -u +%Y-%m-%dT%H:%MZ)" || echo "Sem mudanças"
+          git push
